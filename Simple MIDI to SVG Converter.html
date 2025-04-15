@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<!-- saved from url=(0038)https://polyfjord.com/midi-to-svg.html -->
+<html><head><meta http-equiv="Content-Type" content="text/html; charset=windows-1252">
+    <title>Simple MIDI to SVG Converter</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #1e1e2e;
+            color: #e0e0e0;
+            text-align: center;
+            padding: 20px;
+            margin: 0;
+        }
+        h1 {
+            color: #ffffff;
+        }
+        #midiFileInput {
+            margin: 20px;
+            padding: 10px;
+            background-color: #2b2b3b;
+            color: #e0e0e0;
+            border: none;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        #svgContainer {
+            margin-top: 20px;
+            display: none; /* Hide the container initially */
+        }
+        svg {
+            border: 1px solid #555;
+            background-color: #1e1e2e;
+        }
+        #downloadButton {
+            margin-top: 20px;
+            padding: 10px 20px;
+            background-color: #3b3b5b;
+            color: #ffffff;
+            border: none;
+            cursor: pointer;
+            font-size: 16px;
+            display: none; /* Hide the button initially */
+        }
+        #downloadButton:hover {
+            background-color: #4b4b7b;
+        }
+        input[type="file"]::file-selector-button {
+            padding: 10px 20px;
+            background-color: #3b3b5b;
+            color: #ffffff;
+            border: none;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        input[type="file"]::file-selector-button:hover {
+            background-color: #4b4b7b;
+        }
+    </style>
+</head>
+<body>
+    <h1>Simple MIDI to SVG Converter</h1>
+    <input type="file" id="midiFileInput" accept=".mid,.midi">
+    <div id="svgContainer"></div>
+    <button id="downloadButton">Download SVG</button>
+
+    <script>
+        let generatedSVG = null;
+
+        document.getElementById('midiFileInput').addEventListener('change', function(event) {
+            const file = event.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    const arrayBuffer = e.target.result;
+                    processMIDI(arrayBuffer);
+                };
+                reader.readAsArrayBuffer(file);
+            }
+        });
+
+        function processMIDI(arrayBuffer) {
+            const midiData = parseMIDI(arrayBuffer);
+            const svg = generateSVG(midiData);
+            const svgContainer = document.getElementById('svgContainer');
+            svgContainer.innerHTML = '';
+            svgContainer.appendChild(svg);
+
+            generatedSVG = svg;
+
+            // Show the SVG container and download button now that we have content
+            svgContainer.style.display = 'inline-block';
+            document.getElementById('downloadButton').style.display = 'inline-block';
+        }
+
+        function parseMIDI(arrayBuffer) {
+            const midiArray = new Uint8Array(arrayBuffer);
+            let pointer = 0;
+
+            if (String.fromCharCode(...midiArray.slice(0, 4)) !== 'MThd') {
+                alert('Invalid MIDI file');
+                return [];
+            }
+            pointer += 8;
+            pointer += 6; // Skip format type, track count, and time division
+
+            const tracks = [];
+            while (pointer < midiArray.length) {
+                if (String.fromCharCode(...midiArray.slice(pointer, pointer + 4)) !== 'MTrk') {
+                    alert('Invalid MIDI track');
+                    return [];
+                }
+                pointer += 4;
+                const trackLength = (
+                    (midiArray[pointer++] << 24) |
+                    (midiArray[pointer++] << 16) |
+                    (midiArray[pointer++] << 8) |
+                    midiArray[pointer++]
+                ) >>> 0;
+
+                const trackEnd = pointer + trackLength;
+                const events = [];
+                let time = 0;
+                let lastEventType = null;
+
+                while (pointer < trackEnd) {
+                    let deltaTime = 0;
+                    let byte;
+                    do {
+                        byte = midiArray[pointer++];
+                        deltaTime = (deltaTime << 7) | (byte & 0x7F);
+                    } while (byte & 0x80);
+
+                    time += deltaTime;
+
+                    let eventType = midiArray[pointer++];
+                    if (eventType === 0xFF) {
+                        const metaType = midiArray[pointer++];
+                        let length = 0;
+                        do {
+                            byte = midiArray[pointer++];
+                            length = (length << 7) | (byte & 0x7F);
+                        } while (byte & 0x80);
+                        pointer += length;
+                    } else if (eventType === 0xF0 || eventType === 0xF7) {
+                        let length = 0;
+                        do {
+                            byte = midiArray[pointer++];
+                            length = (length << 7) | (byte & 0x7F);
+                        } while (byte & 0x80);
+                        pointer += length;
+                    } else {
+                        if (eventType < 0x80) {
+                            pointer--;
+                            eventType = lastEventType;
+                        } else {
+                            lastEventType = eventType;
+                        }
+                        const eventTypeHigh = eventType & 0xF0;
+                        if (eventTypeHigh === 0x90 || eventTypeHigh === 0x80) {
+                            const note = midiArray[pointer++];
+                            const velocity = midiArray[pointer++];
+                            if (eventTypeHigh === 0x90 && velocity > 0) {
+                                events.push({ time, note, velocity });
+                            }
+                        } else {
+                            pointer += (eventTypeHigh === 0xC0 || eventTypeHigh === 0xD0) ? 1 : 2;
+                        }
+                    }
+                }
+                tracks.push(events);
+            }
+            return tracks;
+        }
+
+function generateSVG(midiData) {
+    const svgNS = "http://www.w3.org/2000/svg";
+    const notes = [];
+
+    midiData.forEach(track => {
+        track.forEach(event => {
+            notes.push(event);
+        });
+    });
+
+    notes.sort((a, b) => a.time - b.time);
+
+    const maxTime = notes.length > 0 ? notes[notes.length - 1].time : 0;
+    const timeScale = maxTime > 0 ? Math.max(700 / maxTime, 0.1) : 1; // Adjust scale if needed
+    const noteScale = 4;
+    const svgWidth = Math.max(800, maxTime * timeScale + 100); // Adjust canvas width
+    const svgHeight = 600;
+
+    const svg = document.createElementNS(svgNS, "svg");
+    svg.setAttribute("width", svgWidth.toString());
+    svg.setAttribute("height", svgHeight.toString());
+
+    notes.forEach(event => {
+        const x = event.time * timeScale + 50;
+        const y = (127 - event.note) * noteScale + 50;
+
+        const rect = document.createElementNS(svgNS, "rect");
+        rect.setAttribute("x", x);
+        rect.setAttribute("y", y);
+        rect.setAttribute("width", 5);
+        rect.setAttribute("height", 5);
+        rect.setAttribute("fill", "#00ffff");
+        svg.appendChild(rect);
+    });
+
+    return svg;
+}
+
+        document.getElementById('downloadButton').addEventListener('click', function() {
+            if (generatedSVG) {
+                const serializer = new XMLSerializer();
+                let svgString = serializer.serializeToString(generatedSVG);
+
+                svgString = '<?xml version="1.0" standalone="no"?>\r\n' + svgString;
+
+                const blob = new Blob([svgString], {type: 'image/svg+xml;charset=utf-8'});
+                const url = URL.createObjectURL(blob);
+
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = 'midi_visualization.svg';
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                URL.revokeObjectURL(url);
+            }
+        });
+    </script>
+
+
+</body></html>
